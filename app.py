@@ -53,21 +53,54 @@ def _nfc_name(name: str) -> str:
     return unicodedata.normalize("NFC", name.strip())
 
 
-def resolve_preset_txt_path(basename: str) -> Path | None:
-    """프리셋 질의서 경로: 정확 경로 → PRESET_QUERY_DIR → 동일 파일명(NFC) 스캔."""
-    want = _nfc_name(basename)
-    direct = APP_DIR / want
-    if direct.is_file():
-        return direct
+def preset_search_roots() -> tuple[Path, ...]:
+    """프리셋 `.txt`를 찾을 폴더 후보(앱 폴더, 저장소, 바탕화면\\국회\\code 등)."""
+    seen: set[str] = set()
+    out: list[Path] = []
+
+    def add(path: Path) -> None:
+        try:
+            r = path.expanduser().resolve()
+        except OSError:
+            return
+        if not r.is_dir():
+            return
+        key = str(r)
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(r)
+
+    add(APP_DIR)
+    add(ASSEMBLY_ROOT / "code")
+
+    profile = os.environ.get("USERPROFILE") or ""
+    if profile:
+        prof = Path(profile)
+        add(prof / "Desktop" / "국회" / "code")
+        add(prof / "OneDrive" / "Desktop" / "국회" / "code")
+        add(prof / "바탕 화면" / "국회" / "code")
+
+    home = Path.home()
+    add(home / "Desktop" / "국회" / "code")
+    add(home / "OneDrive" / "Desktop" / "국회" / "code")
+    add(home / "바탕 화면" / "국회" / "code")
 
     extra = os.getenv("PRESET_QUERY_DIR", "").strip()
     if extra:
-        alt = Path(extra).expanduser().resolve() / want
-        if alt.is_file():
-            return alt
+        add(Path(extra))
 
-    if APP_DIR.is_dir():
-        for p in APP_DIR.glob("*.txt"):
+    return tuple(out)
+
+
+def resolve_preset_txt_path(basename: str) -> Path | None:
+    """각 검색 루트에서 파일명 일치 또는 폴더 내 NFC 동일 `.txt` 탐색."""
+    want = _nfc_name(basename)
+    for root in preset_search_roots():
+        direct = root / want
+        if direct.is_file():
+            return direct
+        for p in root.glob("*.txt"):
             if p.name.lower() == "requirements.txt":
                 continue
             if _nfc_name(p.name) == want:
@@ -220,7 +253,7 @@ def list_files_by_mtime(directory: Path, extensions: set[str]) -> list[Path]:
 
 
 def load_preset_query_documents() -> list[Document]:
-    """`국회/code`에 넣어둔 프리셋 질의서(3개)를 RAG 검색용 Document로 로드."""
+    """프리셋 질의서(.txt)를 검색 루트에서 찾아 RAG 검색용 Document로 로드."""
     docs: list[Document] = []
     for p in preset_query_paths():
         if not p.is_file():
@@ -500,14 +533,6 @@ def main() -> None:
     preset_docs = load_preset_query_documents()
     ref_docs = load_reference_documents()
     all_docs = preset_docs + ref_docs
-
-    if not preset_docs:
-        st.warning(
-            "프리셋 질의서 파일을 찾지 못했습니다. 저장소의 `국회/code` 폴더에 아래 파일을 두고, "
-            "**Streamlit Cloud 배포 시에는 Git에 커밋·푸시**되어 있어야 합니다.\n- "
-            + "\n- ".join(PRESET_QUERY_FILENAMES)
-            + "\n\n선택: 환경변수 `PRESET_QUERY_DIR`에 질의서 `.txt`가 있는 폴더를 지정할 수 있습니다."
-        )
 
     fp = fingerprint_docs(all_docs)
     docs_tuple = tuple((d.page_content, dict(d.metadata)) for d in all_docs)
