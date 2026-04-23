@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import unicodedata
 from pathlib import Path
 from typing import Any
 
@@ -41,11 +42,46 @@ def _first_existing(paths: list[Path]) -> Path | None:
 LOGO_PATH = _first_existing([APP_DIR / "logo.png", REPO_ROOT / "logo.png"]) or (APP_DIR / "logo.png")
 LOGO_HEADER_WIDTH_PX = 480
 
-PRESET_QUERY_DB: list[Path] = [
-    APP_DIR / "260402 재경위 전체회의 대비.txt",
-    APP_DIR / "260402 재경위 현안질의.txt",
-    APP_DIR / "260407 예결위 종합정책질의(1+2일차).txt",
-]
+PRESET_QUERY_FILENAMES: tuple[str, ...] = (
+    "260402 재경위 전체회의 대비.txt",
+    "260402 재경위 현안질의.txt",
+    "260407 예결위 종합정책질의(1+2일차).txt",
+)
+
+
+def _nfc_name(name: str) -> str:
+    return unicodedata.normalize("NFC", name.strip())
+
+
+def resolve_preset_txt_path(basename: str) -> Path | None:
+    """프리셋 질의서 경로: 정확 경로 → PRESET_QUERY_DIR → 동일 파일명(NFC) 스캔."""
+    want = _nfc_name(basename)
+    direct = APP_DIR / want
+    if direct.is_file():
+        return direct
+
+    extra = os.getenv("PRESET_QUERY_DIR", "").strip()
+    if extra:
+        alt = Path(extra).expanduser().resolve() / want
+        if alt.is_file():
+            return alt
+
+    if APP_DIR.is_dir():
+        for p in APP_DIR.glob("*.txt"):
+            if p.name.lower() == "requirements.txt":
+                continue
+            if _nfc_name(p.name) == want:
+                return p
+    return None
+
+
+def preset_query_paths() -> list[Path]:
+    out: list[Path] = []
+    for name in PRESET_QUERY_FILENAMES:
+        p = resolve_preset_txt_path(name)
+        if p:
+            out.append(p)
+    return out
 
 CHUNK_SIZE = 900
 CHUNK_OVERLAP = 150
@@ -127,11 +163,7 @@ def load_env() -> None:
 
 def get_openai_api_key() -> str:
     load_env()
-    # 우선순위: 수동 입력(session) > Streamlit Secrets > 환경변수/.env
-    manual = str(st.session_state.get("manual_openai_api_key", "")).strip()
-    if manual:
-        return manual
-
+    # 우선순위: Streamlit Secrets > 환경변수/.env
     secret_key = _read_openai_key_from_secrets()
     if secret_key:
         return secret_key
@@ -190,7 +222,7 @@ def list_files_by_mtime(directory: Path, extensions: set[str]) -> list[Path]:
 def load_preset_query_documents() -> list[Document]:
     """`국회/code`에 넣어둔 프리셋 질의서(3개)를 RAG 검색용 Document로 로드."""
     docs: list[Document] = []
-    for p in PRESET_QUERY_DB:
+    for p in preset_query_paths():
         if not p.is_file():
             continue
         try:
@@ -455,16 +487,6 @@ def main() -> None:
             "5. 필요 시 **초안 텍스트 다운로드**로 저장합니다.\n\n"
             "※ 답변은 AI 초안이며, 제출 전 반드시 담당자의 **사실 확인·문장 검토**가 필요합니다."
         )
-        st.divider()
-        manual_key = st.text_input(
-            "OPENAI API Key (필요 시 직접 입력)",
-            type="password",
-            key="manual_openai_api_key",
-            placeholder="sk-...",
-            help="Secrets 인식이 안 될 때 현재 브라우저 세션에서만 사용합니다.",
-        )
-        if manual_key.strip():
-            st.caption("세션용 API 키가 설정되었습니다.")
 
     load_env()
     api_key = get_openai_api_key()
@@ -481,8 +503,10 @@ def main() -> None:
 
     if not preset_docs:
         st.warning(
-            "프리셋 질의서 파일을 찾지 못했습니다. `국회/code` 폴더에 다음 파일을 두십시오:\n- "
-            + "\n- ".join(p.name for p in PRESET_QUERY_DB)
+            "프리셋 질의서 파일을 찾지 못했습니다. 저장소의 `국회/code` 폴더에 아래 파일을 두고, "
+            "**Streamlit Cloud 배포 시에는 Git에 커밋·푸시**되어 있어야 합니다.\n- "
+            + "\n- ".join(PRESET_QUERY_FILENAMES)
+            + "\n\n선택: 환경변수 `PRESET_QUERY_DIR`에 질의서 `.txt`가 있는 폴더를 지정할 수 있습니다."
         )
 
     fp = fingerprint_docs(all_docs)
