@@ -58,18 +58,44 @@ EMBED_MODEL = "text-embedding-3-small"
 SUPPORTED_REF_EXT = {".txt", ".md", ".pdf", ".docx"}
 
 
+def _read_openai_key_from_secrets() -> str:
+    """Streamlit Secrets에서 가능한 여러 키 형태를 탐색해 API 키를 반환."""
+    try:
+        candidates = ("OPENAI_API_KEY", "openai_api_key", "OPENAI_KEY", "openai_key")
+        # 1) 최상위 키
+        for key in candidates:
+            v = st.secrets.get(key)
+            if v and str(v).strip():
+                return str(v).strip()
+
+        # 2) 중첩 섹션 키
+        section_names = ("openai", "OPENAI", "api_keys", "API_KEYS")
+        for section in section_names:
+            sec = st.secrets.get(section)
+            if not sec:
+                continue
+            for key in candidates:
+                try:
+                    v = sec.get(key)  # type: ignore[attr-defined]
+                except Exception:
+                    v = None
+                if v and str(v).strip():
+                    return str(v).strip()
+    except Exception:
+        return ""
+    return ""
+
+
 def load_env() -> None:
-    """로컬: `.env` 로드. Streamlit Cloud: `st.secrets`의 값을 환경변수로 승격."""
+    """로컬: `.env` 로드. Streamlit Cloud: `st.secrets` 값을 환경변수로 승격."""
     for env_path in (REPO_ROOT / ".env", APP_DIR / ".env"):
         if env_path.is_file():
             load_dotenv(env_path)
             break
-    try:
-        for key in ("OPENAI_API_KEY",):
-            if not os.getenv(key) and key in st.secrets:
-                os.environ[key] = str(st.secrets[key])
-    except Exception:
-        pass
+    if not os.getenv("OPENAI_API_KEY"):
+        secret_key = _read_openai_key_from_secrets()
+        if secret_key:
+            os.environ["OPENAI_API_KEY"] = secret_key
 
 
 def has_openai() -> bool:
@@ -389,7 +415,8 @@ def main() -> None:
     load_env()
     if not has_openai():
         st.error(
-            "`OPENAI_API_KEY`가 없습니다. 로컬은 `.env`, Streamlit Cloud는 Secrets에 설정하십시오."
+            "`OPENAI_API_KEY`가 없습니다. 로컬은 `.env`에, Streamlit Cloud는 "
+            "`OPENAI_API_KEY`(또는 `openai_api_key`)를 Secrets에 설정하십시오."
         )
         return
 
