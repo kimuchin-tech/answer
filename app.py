@@ -121,10 +121,14 @@ def load_env() -> None:
 
 def get_openai_api_key() -> str:
     load_env()
+    # 우선순위: 수동 입력(session) > 환경변수/.env > st.secrets 승격값
+    manual = str(st.session_state.get("manual_openai_api_key", "")).strip()
+    if manual:
+        return manual
     key = os.getenv("OPENAI_API_KEY", "").strip()
     if key:
         return key
-    return str(st.session_state.get("manual_openai_api_key", "")).strip()
+    return ""
 
 
 def read_txt_like(path: Path) -> str:
@@ -439,6 +443,16 @@ def main() -> None:
             "5. 필요 시 **초안 텍스트 다운로드**로 저장합니다.\n\n"
             "※ 답변은 AI 초안이며, 제출 전 반드시 담당자의 **사실 확인·문장 검토**가 필요합니다."
         )
+        st.divider()
+        manual_key = st.text_input(
+            "OPENAI API Key (필요 시 직접 입력)",
+            type="password",
+            key="manual_openai_api_key",
+            placeholder="sk-...",
+            help="Secrets 인식이 안 될 때 현재 브라우저 세션에서만 사용합니다.",
+        )
+        if manual_key.strip():
+            st.caption("세션용 API 키가 설정되었습니다.")
 
     load_env()
     api_key = get_openai_api_key()
@@ -447,16 +461,6 @@ def main() -> None:
             "`OPENAI_API_KEY`를 찾지 못했습니다. 먼저 Streamlit Cloud Secrets에 "
             "`OPENAI_API_KEY = \"sk-...\"` 형태로 저장해 주세요."
         )
-        with st.expander("임시 우회: 현재 세션에서만 API 키 직접 입력", expanded=False):
-            manual_key = st.text_input(
-                "OPENAI API Key",
-                type="password",
-                key="manual_openai_api_key_input",
-                placeholder="sk-...",
-            )
-            if manual_key.strip():
-                st.session_state["manual_openai_api_key"] = manual_key.strip()
-                st.success("세션용 API 키가 저장되었습니다. 페이지를 새로고침 후 다시 시도하세요.")
         return
 
     preset_docs = load_preset_query_documents()
