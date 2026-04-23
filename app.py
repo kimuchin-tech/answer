@@ -119,9 +119,12 @@ def load_env() -> None:
             os.environ["OPENAI_API_KEY"] = secret_key
 
 
-def has_openai() -> bool:
+def get_openai_api_key() -> str:
     load_env()
-    return bool(os.getenv("OPENAI_API_KEY", "").strip())
+    key = os.getenv("OPENAI_API_KEY", "").strip()
+    if key:
+        return key
+    return str(st.session_state.get("manual_openai_api_key", "")).strip()
 
 
 def read_txt_like(path: Path) -> str:
@@ -221,8 +224,12 @@ def load_reference_documents() -> list[Document]:
 
 
 @st.cache_resource
-def build_faiss_index(_docs_fingerprint: str, docs_data: tuple[tuple[str, dict[str, Any]], ...]) -> FAISS | None:
-    if not has_openai() or not docs_data:
+def build_faiss_index(
+    _docs_fingerprint: str,
+    docs_data: tuple[tuple[str, dict[str, Any]], ...],
+    api_key: str,
+) -> FAISS | None:
+    if not api_key or not docs_data:
         return None
     docs = [Document(page_content=t, metadata=m) for t, m in docs_data]
     splitter = RecursiveCharacterTextSplitter(
@@ -233,7 +240,7 @@ def build_faiss_index(_docs_fingerprint: str, docs_data: tuple[tuple[str, dict[s
     splits = splitter.split_documents(docs)
     if not splits:
         return None
-    emb = OpenAIEmbeddings(model=EMBED_MODEL)
+    emb = OpenAIEmbeddings(model=EMBED_MODEL, api_key=api_key)
     return FAISS.from_documents(splits, emb)
 
 
@@ -434,11 +441,22 @@ def main() -> None:
         )
 
     load_env()
-    if not has_openai():
+    api_key = get_openai_api_key()
+    if not api_key:
         st.error(
-            "`OPENAI_API_KEY`가 없습니다. 로컬은 `.env`에, Streamlit Cloud는 "
-            "`OPENAI_API_KEY`(또는 `openai_api_key`)를 Secrets에 설정하십시오."
+            "`OPENAI_API_KEY`를 찾지 못했습니다. 먼저 Streamlit Cloud Secrets에 "
+            "`OPENAI_API_KEY = \"sk-...\"` 형태로 저장해 주세요."
         )
+        with st.expander("임시 우회: 현재 세션에서만 API 키 직접 입력", expanded=False):
+            manual_key = st.text_input(
+                "OPENAI API Key",
+                type="password",
+                key="manual_openai_api_key_input",
+                placeholder="sk-...",
+            )
+            if manual_key.strip():
+                st.session_state["manual_openai_api_key"] = manual_key.strip()
+                st.success("세션용 API 키가 저장되었습니다. 페이지를 새로고침 후 다시 시도하세요.")
         return
 
     preset_docs = load_preset_query_documents()
@@ -453,7 +471,7 @@ def main() -> None:
 
     fp = fingerprint_docs(all_docs)
     docs_tuple = tuple((d.page_content, dict(d.metadata)) for d in all_docs)
-    store = build_faiss_index(fp, docs_tuple)
+    store = build_faiss_index(fp, docs_tuple, api_key)
     if all_docs and store is None:
         st.warning("질의 DB가 있으나 벡터 인덱스를 만들지 못했습니다. API 키를 확인하십시오.")
 
@@ -481,8 +499,8 @@ def main() -> None:
 
     query_text = user_question.strip()
 
-    llm_summary = ChatOpenAI(model=MODEL, temperature=0.2)
-    llm_draft = ChatOpenAI(model=MODEL, temperature=0.45)
+    llm_summary = ChatOpenAI(model=MODEL, temperature=0.2, api_key=api_key)
+    llm_draft = ChatOpenAI(model=MODEL, temperature=0.45, api_key=api_key)
 
     with st.spinner("1/2 현안 파악(질문 요약, 내부 참고)…"):
         summary = run_summary(llm_summary, mp_name.strip(), query_text)
