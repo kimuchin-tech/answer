@@ -59,28 +59,49 @@ SUPPORTED_REF_EXT = {".txt", ".md", ".pdf", ".docx"}
 
 
 def _read_openai_key_from_secrets() -> str:
-    """Streamlit Secrets에서 가능한 여러 키 형태를 탐색해 API 키를 반환."""
-    try:
-        candidates = ("OPENAI_API_KEY", "openai_api_key", "OPENAI_KEY", "openai_key")
-        # 1) 최상위 키
-        for key in candidates:
-            v = st.secrets.get(key)
-            if v and str(v).strip():
-                return str(v).strip()
+    """Streamlit Secrets에서 다양한 구조의 OpenAI 키를 탐색."""
+    candidates = {"openai_api_key", "openai_key", "api_key"}
 
-        # 2) 중첩 섹션 키
-        section_names = ("openai", "OPENAI", "api_keys", "API_KEYS")
-        for section in section_names:
-            sec = st.secrets.get(section)
-            if not sec:
-                continue
-            for key in candidates:
-                try:
-                    v = sec.get(key)  # type: ignore[attr-defined]
-                except Exception:
-                    v = None
-                if v and str(v).strip():
-                    return str(v).strip()
+    def _normalize(v: Any) -> str:
+        s = str(v).strip()
+        return s if s else ""
+
+    def _from_mapping(obj: Any) -> str:
+        if not hasattr(obj, "items"):
+            return ""
+        try:
+            items = list(obj.items())
+        except Exception:
+            return ""
+        for k, v in items:
+            key_norm = str(k).strip().lower()
+            # 키 이름으로 직접 매칭
+            if key_norm in candidates:
+                val = _normalize(v)
+                if val:
+                    return val
+            # OPENAI_API_KEY, OPENAI_KEY 같은 변형 대응
+            if key_norm.startswith("openai") and key_norm.endswith("key"):
+                val = _normalize(v)
+                if val:
+                    return val
+            # 중첩 섹션 재귀 탐색
+            nested = _from_mapping(v)
+            if nested:
+                return nested
+        return ""
+
+    try:
+        # 1) st.secrets 자체를 순회(대부분 케이스)
+        found = _from_mapping(st.secrets)
+        if found:
+            return found
+        # 2) to_dict() 가능한 환경에서 재시도
+        to_dict = getattr(st.secrets, "to_dict", None)
+        if callable(to_dict):
+            found = _from_mapping(to_dict())
+            if found:
+                return found
     except Exception:
         return ""
     return ""
