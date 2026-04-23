@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import streamlit as st
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
@@ -108,26 +108,38 @@ def _read_openai_key_from_secrets() -> str:
 
 
 def load_env() -> None:
-    """로컬: `.env` 로드. Streamlit Cloud: `st.secrets` 값을 환경변수로 승격."""
+    """로컬 `.env`를 로드하고 OpenAI 키 별칭을 표준 키로 정규화."""
     for env_path in (REPO_ROOT / ".env", APP_DIR / ".env"):
         if env_path.is_file():
-            load_dotenv(env_path)
+            # 이미 비어있는 시스템 변수 때문에 .env가 무시되지 않도록 강제 반영
+            load_dotenv(env_path, override=True)
+            # OPENAI 키 별칭을 OPENAI_API_KEY로 정규화
+            env_map = dotenv_values(env_path)
+            alias_candidates = ("OPEN_API_KEY", "OPENAI_KEY", "openai_api_key", "open_api_key")
+            if not os.getenv("OPENAI_API_KEY", "").strip():
+                for alias in alias_candidates:
+                    v = str(env_map.get(alias, "")).strip()
+                    if v:
+                        os.environ["OPENAI_API_KEY"] = v
+                        break
             break
-    if not os.getenv("OPENAI_API_KEY"):
-        secret_key = _read_openai_key_from_secrets()
-        if secret_key:
-            os.environ["OPENAI_API_KEY"] = secret_key
 
 
 def get_openai_api_key() -> str:
     load_env()
-    # 우선순위: 수동 입력(session) > 환경변수/.env > st.secrets 승격값
+    # 우선순위: 수동 입력(session) > Streamlit Secrets > 환경변수/.env
     manual = str(st.session_state.get("manual_openai_api_key", "")).strip()
     if manual:
         return manual
-    key = os.getenv("OPENAI_API_KEY", "").strip()
-    if key:
-        return key
+
+    secret_key = _read_openai_key_from_secrets()
+    if secret_key:
+        return secret_key
+
+    for env_name in ("OPENAI_API_KEY", "openai_api_key", "OPEN_API_KEY", "OPENAI_KEY"):
+        key = os.getenv(env_name, "").strip()
+        if key:
+            return key
     return ""
 
 
